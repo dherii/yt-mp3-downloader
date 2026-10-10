@@ -1,0 +1,39 @@
+name: Compilar Executável Windows
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar Dependências
+        # Adicionado o customtkinter aqui
+        run: |
+          pip install yt-dlp pyinstaller customtkinter
+
+      - name: Gerar Executável
+        shell: pwsh
+        run: |
+          # Descobre dinamicamente a pasta do CustomTkinter para copiar os temas
+          $ctk = python -c "import customtkinter, os; print(os.path.dirname(customtkinter.__file__))"
+          
+          # Comando do PyInstaller atualizado
+          pyinstaller --noconfirm --onefile --windowed `
+            --name "BaixarMusicas" `
+            --add-data "${ctk};customtkinter/" `
+            main.py
+
+      - name: Upload do Executável
+        uses: actions/upload-artifact@v4
+        with:
+          name: BaixarMusicas-Windows
+          # Atualizado para buscar o novo nome do executável gerado
+          path: dist/BaixarMusicas.exe
