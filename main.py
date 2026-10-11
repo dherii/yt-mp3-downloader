@@ -1,4 +1,4 @@
-"""Baixador de MP3 do YouTube — CustomTkinter + yt-dlp.
+"""Baixador de MP3/MP4 do YouTube — CustomTkinter + yt-dlp.
 
 Funciona tanto rodando direto com Python (Linux/Windows/macOS) quanto
 empacotado com PyInstaller (--onefile) no Windows.
@@ -12,11 +12,19 @@ import sys
 import threading
 import time
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import PhotoImage, filedialog, messagebox
 
 import customtkinter as ctk
 import yt_dlp
+from yt_dlp.postprocessor import FFmpegExtractAudioPP
 from yt_dlp.utils import DownloadCancelled
+
+# Formatos oferecidos na interface
+MODO_MP3 = "Só MP3"
+MODO_MP4 = "Só MP4"
+MODO_AMBOS = "MP3 + MP4"
+MODOS = [MODO_MP3, MODO_MP4, MODO_AMBOS]
+QUALIDADES = ["1080p", "720p", "480p", "360p"]
 
 
 # ==========================================================
@@ -95,6 +103,43 @@ class LoggerSilencioso:
     def error(self, msg): pass
 
 
+def seletor_mp4(altura: int) -> str:
+    """Formato do yt-dlp para MP4 com no máximo `altura` pixels.
+
+    Prefere H.264 (avc1) + AAC (m4a), que toca em qualquer player; se o vídeo não
+    tiver, cai para as alternativas. `<=?` aceita formatos sem altura informada.
+    """
+    h = f"[height<=?{altura}]"
+    return (
+        f"bv*{h}[ext=mp4][vcodec^=avc1]+ba[ext=m4a]"
+        f"/b{h}[ext=mp4]"
+        f"/bv*{h}+ba"
+        f"/b{h}"
+        "/b"
+    )
+
+
+def arquivos_baixados(info: dict | None) -> list[str]:
+    """Caminhos finais dos arquivos que o yt-dlp gravou (trata playlists também)."""
+    if not info:
+        return []
+    if info.get("entries"):
+        return [f for e in info["entries"] for f in arquivos_baixados(e)]
+    return [
+        d["filepath"] for d in (info.get("requested_downloads") or []) if d.get("filepath")
+    ]
+
+
+def extrair_mp3(ydl: yt_dlp.YoutubeDL, caminho_video: str) -> str:
+    """Gera um MP3 ao lado do vídeo já baixado, SEM apagar o vídeo. Retorna o caminho do MP3."""
+    p = Path(caminho_video)
+    pp = FFmpegExtractAudioPP(ydl, preferredcodec="mp3", preferredquality="192")
+    _, info = pp.run(
+        {"filepath": str(p), "ext": p.suffix.lstrip("."), "id": p.stem, "title": p.stem}
+    )
+    return info["filepath"]
+
+
 # ==========================================================
 # Aplicação
 # ==========================================================
@@ -106,21 +151,44 @@ class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Baixar MP3 do YouTube")
-        self.geometry("660x580")
-        self.minsize(580, 540)
+        self.title("Baixar MP3 / MP4 do YouTube")
+        self.geometry("680x660")
+        self.minsize(600, 620)
 
         # Estado
         self.cancelar = False
         self.baixando = False
+        self._modo_atual = MODO_MP3
         self._texto_geral = "Pronto para baixar"
+        self._titulo_atual = ""
         self._ultimo_envio = 0.0
         self.fila: queue.Queue = queue.Queue()  # thread de download -> UI
         self.var_pasta = ctk.StringVar(value=str(obter_pasta_downloads()))
+        self.var_modo = ctk.StringVar(value=MODO_MP3)
+        self.var_qualidade = ctk.StringVar(value=QUALIDADES[0])
 
+        self._definir_icone()
         self._construir_interface()
+        self._atualizar_controles()
         self.protocol("WM_DELETE_WINDOW", self._ao_fechar)
         self.after(100, self._processar_fila)
+
+    # ------------------------------------------------------
+    # Ícone da janela
+    # ------------------------------------------------------
+    def _definir_icone(self):
+        """Ícone da barra de título/barra de tarefas. Nunca deve derrubar o app."""
+        try:
+            if sys.platform == "win32":
+                ico = caminho_recurso("assets", "icon.ico")
+                self.iconbitmap(ico)
+                # O CustomTkinter reaplica o ícone dele ~200 ms após abrir; reaplicamos depois.
+                self.after(300, lambda: self.iconbitmap(ico))
+            else:
+                self._icone = PhotoImage(file=caminho_recurso("assets", "icon.png"))
+                self.iconphoto(True, self._icone)
+        except Exception:
+            pass
 
     # ------------------------------------------------------
     # Interface
@@ -135,7 +203,7 @@ class App(ctk.CTk):
         card.grid_rowconfigure(2, weight=1)  # a caixa de URLs cresce com a janela
 
         ctk.CTkLabel(
-            card, text="YouTube  ➜  MP3", font=ctk.CTkFont(size=24, weight="bold")
+            card, text="YouTube  ➜  MP3 / MP4", font=ctk.CTkFont(size=24, weight="bold")
         ).grid(row=0, column=0, sticky="w", padx=24, pady=(22, 2))
 
         ctk.CTkLabel(
@@ -151,13 +219,39 @@ class App(ctk.CTk):
         self.entrada_urls.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 16))
         self.entrada_urls.focus()
 
+        # --- Formato (MP3 / MP4 / ambos) e qualidade do vídeo ---
+        ctk.CTkLabel(
+            card, text="Formato:", font=ctk.CTkFont(size=13, weight="bold")
+        ).grid(row=3, column=0, sticky="w", padx=24, pady=(0, 6))
+
+        linha_formato = ctk.CTkFrame(card, fg_color="transparent")
+        linha_formato.grid(row=4, column=0, sticky="ew", padx=24, pady=(0, 16))
+        linha_formato.grid_columnconfigure(0, weight=1)
+
+        self.seletor_formato = ctk.CTkSegmentedButton(
+            linha_formato, values=MODOS, variable=self.var_modo,
+            command=self._ao_mudar_modo, height=36, corner_radius=8,
+        )
+        self.seletor_formato.grid(row=0, column=0, sticky="ew", padx=(0, 14))
+
+        ctk.CTkLabel(
+            linha_formato, text="Qualidade do vídeo:", font=ctk.CTkFont(size=12),
+            text_color=("gray30", "gray70"),
+        ).grid(row=0, column=1, padx=(0, 8))
+
+        self.menu_qualidade = ctk.CTkOptionMenu(
+            linha_formato, values=QUALIDADES, variable=self.var_qualidade,
+            width=96, height=36, corner_radius=8,
+        )
+        self.menu_qualidade.grid(row=0, column=2)
+
         # --- Pasta de destino ---
         ctk.CTkLabel(
             card, text="Salvar em:", font=ctk.CTkFont(size=13, weight="bold")
-        ).grid(row=3, column=0, sticky="w", padx=24, pady=(0, 6))
+        ).grid(row=5, column=0, sticky="w", padx=24, pady=(0, 6))
 
         linha_pasta = ctk.CTkFrame(card, fg_color="transparent")
-        linha_pasta.grid(row=4, column=0, sticky="ew", padx=24, pady=(0, 18))
+        linha_pasta.grid(row=6, column=0, sticky="ew", padx=24, pady=(0, 18))
         linha_pasta.grid_columnconfigure(0, weight=1)
 
         self.entrada_pasta = ctk.CTkEntry(
@@ -173,12 +267,12 @@ class App(ctk.CTk):
 
         # --- Botões de ação ---
         linha_botoes = ctk.CTkFrame(card, fg_color="transparent")
-        linha_botoes.grid(row=5, column=0, sticky="ew", padx=24, pady=(0, 18))
+        linha_botoes.grid(row=7, column=0, sticky="ew", padx=24, pady=(0, 18))
         linha_botoes.grid_columnconfigure(0, weight=3)
         linha_botoes.grid_columnconfigure(1, weight=1)
 
         self.botao_baixar = ctk.CTkButton(
-            linha_botoes, text="📥  Baixar Áudios (MP3)", height=44, corner_radius=10,
+            linha_botoes, text="📥  Baixar", height=44, corner_radius=10,
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color=self.COR_VERDE, hover_color=self.COR_VERDE_HOVER,
             command=self._iniciar_download,
@@ -197,17 +291,17 @@ class App(ctk.CTk):
         self.rotulo_status = ctk.CTkLabel(
             card, text=self._texto_geral, anchor="w", font=ctk.CTkFont(size=13, weight="bold")
         )
-        self.rotulo_status.grid(row=6, column=0, sticky="ew", padx=24)
+        self.rotulo_status.grid(row=8, column=0, sticky="ew", padx=24)
 
         self.rotulo_arquivo = ctk.CTkLabel(
             card, text="", anchor="w", font=ctk.CTkFont(size=12),
             text_color=("gray30", "gray70"),
         )
-        self.rotulo_arquivo.grid(row=7, column=0, sticky="ew", padx=24, pady=(2, 6))
+        self.rotulo_arquivo.grid(row=9, column=0, sticky="ew", padx=24, pady=(2, 6))
 
         self.barra = ctk.CTkProgressBar(card, height=14, corner_radius=7)
         self.barra.set(0)
-        self.barra.grid(row=8, column=0, sticky="ew", padx=24, pady=(0, 24))
+        self.barra.grid(row=10, column=0, sticky="ew", padx=24, pady=(0, 24))
 
     # ------------------------------------------------------
     # Ações da UI
@@ -221,6 +315,9 @@ class App(ctk.CTk):
         if escolhida:
             self.var_pasta.set(escolhida)
 
+    def _ao_mudar_modo(self, _valor: str | None = None):
+        self._atualizar_controles()
+
     def _iniciar_download(self):
         if self.baixando:
             return
@@ -233,7 +330,7 @@ class App(ctk.CTk):
 
         texto_pasta = self.var_pasta.get().strip()
         if not texto_pasta:
-            messagebox.showwarning("Aviso", "Escolha a pasta onde os MP3 serão salvos.")
+            messagebox.showwarning("Aviso", "Escolha a pasta onde os arquivos serão salvos.")
             return
         pasta = Path(texto_pasta).expanduser()
         try:
@@ -246,19 +343,27 @@ class App(ctk.CTk):
         if ffmpeg_dir is None:
             messagebox.showerror(
                 "FFmpeg não encontrado",
-                "O FFmpeg é necessário para converter o áudio em MP3.\n"
+                "O FFmpeg é necessário para converter o áudio e juntar vídeo e áudio.\n"
                 "Instale-o e adicione ao PATH, ou coloque o ffmpeg ao lado do programa.",
             )
             return
 
+        # Lê a interface AQUI (thread principal); a thread de download só recebe valores.
+        modo = self.var_modo.get()
+        altura = int(self.var_qualidade.get().rstrip("p"))
+
         self.cancelar = False
+        self._modo_atual = modo
+        self._titulo_atual = ""
         self._alternar_estado(baixando=True)
         self._definir_status_geral("Iniciando...")
         self.rotulo_arquivo.configure(text="")
         self.barra.set(0)
 
         threading.Thread(
-            target=self._executar_download, args=(urls, pasta, ffmpeg_dir), daemon=True
+            target=self._executar_download,
+            args=(urls, pasta, ffmpeg_dir, modo, altura),
+            daemon=True,
         ).start()
 
     def _cancelar_download(self):
@@ -276,19 +381,38 @@ class App(ctk.CTk):
 
     def _alternar_estado(self, baixando: bool):
         self.baixando = baixando
-        self.botao_baixar.configure(state="disabled" if baixando else "normal")
-        self.botao_procurar.configure(state="disabled" if baixando else "normal")
-        self.entrada_pasta.configure(state="disabled" if baixando else "normal")
+        self._atualizar_controles()
+
+    def _atualizar_controles(self):
+        """Habilita/desabilita os controles conforme o estado (baixando) e o formato."""
+        ocupado = self.baixando
+        estado = "disabled" if ocupado else "normal"
+        self.botao_baixar.configure(state=estado)
+        self.botao_procurar.configure(state=estado)
+        self.entrada_pasta.configure(state=estado)
+        self.seletor_formato.configure(state=estado)
+        usa_video = self.var_modo.get() != MODO_MP3
+        self.menu_qualidade.configure(
+            state="normal" if (usa_video and not ocupado) else "disabled"
+        )
         self.botao_cancelar.configure(
-            state="normal" if baixando else "disabled", text="Cancelar"
+            state="normal" if ocupado else "disabled", text="Cancelar"
         )
 
     def _definir_status_geral(self, texto: str):
         self._texto_geral = texto
         self.rotulo_status.configure(text=texto)
 
+    def _mostrar_detalhe(self, detalhe: str):
+        """Linha de baixo: 'Título do vídeo — detalhe'."""
+        if self._titulo_atual:
+            texto = f"{self._encurtar(self._titulo_atual)} — {detalhe}" if detalhe else self._encurtar(self._titulo_atual)
+        else:
+            texto = detalhe
+        self.rotulo_arquivo.configure(text=texto)
+
     @staticmethod
-    def _encurtar(texto: str, limite: int = 70) -> str:
+    def _encurtar(texto: str, limite: int = 60) -> str:
         return texto if len(texto) <= limite else texto[: limite - 1] + "…"
 
     # ------------------------------------------------------
@@ -301,15 +425,18 @@ class App(ctk.CTk):
                 tipo = msg[0]
                 if tipo == "geral":
                     self._definir_status_geral(msg[1])
+                elif tipo == "novo":  # começou um novo link
+                    self._titulo_atual = ""
+                    self.barra.set(0)
+                    self._mostrar_detalhe("Obtendo informações do vídeo...")
                 elif tipo == "arquivo":
-                    _, fracao, titulo = msg
-                    self.barra.set(fracao)
+                    _, fracao, titulo, etapa = msg
                     if titulo:
-                        self.rotulo_arquivo.configure(
-                            text=f"{self._encurtar(titulo)} — {fracao * 100:.0f}%"
-                        )
-                elif tipo == "convertendo":
-                    self.rotulo_status.configure(text=f"{self._texto_geral} — Convertendo áudio...")
+                        self._titulo_atual = titulo
+                    self.barra.set(fracao)
+                    self._mostrar_detalhe(f"{etapa} {fracao * 100:.0f}%".strip())
+                elif tipo == "processando":
+                    self._mostrar_detalhe(msg[1])
                 elif tipo == "fim":
                     self._finalizar(*msg[1:])
                 elif tipo == "fatal":
@@ -335,8 +462,13 @@ class App(ctk.CTk):
             )
         else:
             self._definir_status_geral("Todos os downloads concluídos!")
+            como = {
+                MODO_MP3: "MP3",
+                MODO_MP4: "MP4",
+                MODO_AMBOS: "MP3 e MP4",
+            }.get(self._modo_atual, "")
             messagebox.showinfo(
-                "Sucesso", f"{total} música(s) baixada(s) e salva(s) como MP3 em:\n{pasta}"
+                "Sucesso", f"{total} item(ns) baixado(s) e salvo(s) como {como} em:\n{pasta}"
             )
 
     def _erro_fatal(self, detalhe: str):
@@ -348,13 +480,26 @@ class App(ctk.CTk):
     # ------------------------------------------------------
     # Download (roda em thread daemon)
     # ------------------------------------------------------
+    @staticmethod
+    def _nome_etapa(info: dict) -> str:
+        """'Vídeo' ou 'Áudio' conforme o fluxo que está sendo baixado agora."""
+        vcodec, acodec = info.get("vcodec"), info.get("acodec")
+        if vcodec and vcodec != "none":
+            return "Vídeo"
+        if acodec and acodec != "none":
+            return "Áudio"
+        return ""
+
     def _hook_progresso(self, d: dict):
         # Ponto de cancelamento: o yt-dlp chama este hook a cada bloco baixado.
         if self.cancelar:
             raise DownloadCancelado()
 
         status = d.get("status")
-        titulo = (d.get("info_dict") or {}).get("title", "")
+        info = d.get("info_dict") or {}
+        titulo = info.get("title", "")
+        # No modo só-MP3 há um único fluxo de áudio: não precisa rotular a etapa.
+        etapa = "" if self._modo_atual == MODO_MP3 else self._nome_etapa(info)
 
         if status == "downloading":
             agora = time.monotonic()
@@ -364,26 +509,19 @@ class App(ctk.CTk):
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             baixado = d.get("downloaded_bytes", 0)
             if total:
-                self.fila.put(("arquivo", min(baixado / total, 1.0), titulo))
+                self.fila.put(("arquivo", min(baixado / total, 1.0), titulo, etapa))
         elif status == "finished":
-            self.fila.put(("arquivo", 1.0, titulo))
-            self.fila.put(("convertendo",))
+            self.fila.put(("arquivo", 1.0, titulo, etapa))
+            texto = "Convertendo para MP3..." if self._modo_atual == MODO_MP3 else "Processando..."
+            self.fila.put(("processando", texto))
 
-    def _montar_opcoes(self, pasta: Path, ffmpeg_dir: str) -> dict:
-        return {
-            "format": "bestaudio/best",
+    def _montar_opcoes(self, pasta: Path, ffmpeg_dir: str, modo: str, altura: int) -> dict:
+        opcoes = {
             "outtmpl": str(pasta / "%(title)s.%(ext)s"),
             "noplaylist": True,
             "extractor_args": {
                 "youtube": {"player_client": ["android", "ios", "web_creator"]}
             },
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ],
             "progress_hooks": [self._hook_progresso],
             "ffmpeg_location": ffmpeg_dir,
             "logger": LoggerSilencioso(),
@@ -391,24 +529,44 @@ class App(ctk.CTk):
             "no_warnings": True,
             "noprogress": True,
         }
+        if modo == MODO_MP3:
+            opcoes["format"] = "bestaudio/best"
+            opcoes["postprocessors"] = [
+                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
+            ]
+        else:
+            # MP4 e "Ambos": baixa o vídeo uma única vez. No modo Ambos, o MP3 é extraído
+            # depois do arquivo MP4 local (sem baixar o áudio de novo).
+            opcoes["format"] = seletor_mp4(altura)
+            opcoes["merge_output_format"] = "mp4"
+        return opcoes
 
-    def _executar_download(self, urls: list[str], pasta: Path, ffmpeg_dir: str):
+    def _executar_download(
+        self, urls: list[str], pasta: Path, ffmpeg_dir: str, modo: str, altura: int
+    ):
         total = len(urls)
         sucessos = 0
         erros: list[str] = []
         cancelado = False
 
         try:
-            with yt_dlp.YoutubeDL(self._montar_opcoes(pasta, ffmpeg_dir)) as ydl:
+            with yt_dlp.YoutubeDL(self._montar_opcoes(pasta, ffmpeg_dir, modo, altura)) as ydl:
                 for i, url in enumerate(urls, 1):
                     if self.cancelar:
                         cancelado = True
                         break
 
                     self.fila.put(("geral", f"Baixando {i} de {total}..."))
-                    self.fila.put(("arquivo", 0.0, ""))
+                    self.fila.put(("novo",))
                     try:
-                        ydl.download([url])
+                        info = ydl.extract_info(url, download=True)
+                        if modo == MODO_AMBOS:
+                            arquivos = arquivos_baixados(info)
+                            if not arquivos:
+                                raise RuntimeError("yt-dlp não informou o arquivo baixado")
+                            self.fila.put(("processando", "Extraindo o MP3 do vídeo..."))
+                            for arquivo in arquivos:
+                                extrair_mp3(ydl, arquivo)
                         sucessos += 1
                     except DownloadCancelled:
                         cancelado = True

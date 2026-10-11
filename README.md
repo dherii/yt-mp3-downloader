@@ -1,105 +1,64 @@
-# 🎵 BaixarMusicas GUI (YouTube para MP3)
+# YouTube ➜ MP3 / MP4
 
-Um aplicativo moderno, rápido e simples para baixar áudios do YouTube no formato MP3. Desenvolvido em Python, utilizando a biblioteca **CustomTkinter** para oferecer uma interface gráfica moderna e fluida em Dark Mode, e o poderoso **yt-dlp** para o processamento dos vídeos.
+Programa simples, com janela, para baixar vídeos do YouTube como **MP3** (só o áudio), **MP4** (vídeo) ou **os dois de uma vez**.
+Cole os links, escolha o formato e a pasta e clique em baixar. Feito com Python, [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) e [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
-## ✨ Funcionalidades
+## ⬇️ Baixar para Windows
 
-- **Interface Moderna:** Design responsivo com suporte a Dark Mode.
-- **Processamento em Segundo Plano:** A interface permanece responsiva durante os downloads, graças ao uso de multithreading.
-- **Controle Total:** Escolha a pasta de destino para salvar suas músicas.
-- **Feedback em Tempo Real:** Barras de progresso para acompanhar o andamento geral dos downloads e o progresso individual de cada arquivo.
-- **Cancelamento Seguro:** Cancele downloads em andamento sem comprometer o funcionamento do aplicativo.
-- **Executável Standalone:** Versão para Windows empacotada em um único arquivo `.exe`, sem necessidade de instalar o Python.
+### [**Clique aqui para baixar o programa (.exe)**](../../releases/latest/download/YT-MP3-Downloader.exe)
 
----
+Não precisa instalar nada, nem Python, nem FFmpeg, nem usar o prompt de comando.
 
-## 📥 Como baixar e usar (Para usuários)
+1. Clique no link acima. O arquivo `YT-MP3-Downloader.exe` será baixado.
+2. Dê dois cliques nele para abrir.
+3. Cole os links do YouTube (um por linha), escolha **Só MP3**, **Só MP4** ou **MP3 + MP4**, e clique em **Baixar**.
 
-O aplicativo é compilado automaticamente para Windows por meio do GitHub Actions. Para baixar a versão mais recente:
+> Prefere ver todas as versões? Veja a página de [Releases](../../releases).
 
-1. Acesse a aba [**Actions**](../../actions) deste repositório.
-2. Selecione a execução mais recente concluída com sucesso, identificada pelo ícone verde (✅).
-3. Role a página até a seção **Artifacts**.
-4. Clique em `BaixarMusicas-Windows` para baixar o arquivo `.zip`.
-5. Extraia o conteúdo do arquivo baixado.
-6. Execute o arquivo `BaixarMusicas.exe`.
+### O Windows mostrou um aviso azul. É seguro?
 
-> **Aviso:** O GitHub exige que você esteja autenticado em uma conta para baixar arquivos da seção Artifacts. Esses arquivos também podem expirar de acordo com as configurações de retenção do workflow.
+Ao abrir pela primeira vez, o Windows pode mostrar **"O Windows protegeu o computador"**. Isso acontece com qualquer programa novo que não tem assinatura digital paga, e este é gratuito e de código aberto.
 
----
+Para abrir mesmo assim: clique em **Mais informações** e depois em **Executar assim mesmo**.
 
-## 💻 Como executar localmente (Para desenvolvedores)
+Alguns antivírus também podem marcar o arquivo por engano (falso positivo comum em programas feitos com PyInstaller). Todo o código-fonte está neste repositório, e o `.exe` é gerado automaticamente pelo GitHub a partir dele (veja `.github/workflows/build.yml`).
 
-Se você utiliza Linux ou macOS, deseja executar o projeto diretamente pelo código-fonte ou pretende contribuir com o desenvolvimento, siga os passos abaixo.
+## Recursos
 
-### 1. Clone o repositório
+- Visual moderno (modo escuro)
+- Escolha do formato: **só MP3**, **só MP4** ou **MP3 + MP4** (o MP3 é extraído do próprio vídeo, sem baixar duas vezes)
+- Qualidade do vídeo MP4: 1080p, 720p, 480p ou 360p
+- Vários links de uma vez, com progresso geral (“Baixando 2 de 5”) e barra do arquivo atual (Vídeo / Áudio)
+- Botão **Cancelar** que interrompe com segurança
+- Escolha da pasta de destino (o padrão é a pasta Downloads)
+- O FFmpeg já vem dentro do `.exe`
+- Uma versão nova é publicada automaticamente todo mês, com o yt-dlp atualizado
 
-Substitua `SEU_USUARIO` e `SEU_REPOSITORIO` pelos dados reais do repositório.
+## Não funcionou?
 
-```bash
-git clone https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
-cd SEU_REPOSITORIO
-```
+O YouTube muda com frequência e isso pode quebrar downloads até que o yt-dlp seja atualizado. Se parar de funcionar, confira se há uma [versão mais nova](../../releases/latest) ou abra uma [issue](../../issues).
 
-### 2. Crie e ative um ambiente virtual
+## Rodando pelo código (Linux, macOS, Windows)
 
-É recomendável utilizar um ambiente virtual para isolar as dependências do projeto.
-
-**Linux/macOS:**
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-**Windows (PowerShell):**
-
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
-
-### 3. Instale as dependências
-
-Se o projeto possuir um arquivo `requirements.txt`, execute:
+Requer Python 3.10+ e o [FFmpeg](https://ffmpeg.org/download.html) instalado e no PATH.
 
 ```bash
 pip install -r requirements.txt
-```
-
-Caso o arquivo não esteja disponível, instale as dependências básicas manualmente:
-
-```bash
-pip install customtkinter yt-dlp pyinstaller
-```
-
-**Observação:** O FFmpeg também pode ser necessário para converter os áudios para MP3. Verifique se ele está instalado e disponível no PATH do sistema.
-
-### 4. Execute o aplicativo
-
-Com as dependências instaladas e o ambiente virtual ativado, execute:
-
-```bash
 python main.py
 ```
 
----
+## Para quem mantém o projeto: como as versões são publicadas
 
-## 🛠️ Tecnologias utilizadas
+O `.exe` é compilado pelo GitHub Actions (`.github/workflows/build.yml`) de três formas:
 
-- **Python 3.11+:** Linguagem de programação principal.
-- **CustomTkinter:** Biblioteca utilizada para a construção da interface gráfica.
-- **yt-dlp:** Ferramenta responsável pelo processamento e download de conteúdo compatível.
-- **FFmpeg:** Ferramenta utilizada na conversão e no processamento de áudio.
-- **PyInstaller:** Ferramenta para empacotamento do aplicativo em um executável.
-- **GitHub Actions:** Automação do processo de compilação e disponibilização dos artefatos.
+| Como | O que acontece |
+| --- | --- |
+| **Actions > Build Windows > Run workflow** | Teste: compila e deixa o `.exe` como *artefato* da execução. **Não** cria Release. |
+| **Enviar uma tag** (`git tag v1.2.0` e `git push origin v1.2.0`) | Compila e cria a Release `v1.2.0` com o `.exe` anexado. |
+| **Automático, dia 1 de cada mês** | Compila com o yt-dlp mais recente e cria a Release `vAAAA.MM.DD` (ex.: `v2026.11.01`). |
 
----
+Se o repositório ficar sem nenhuma atividade por 60 dias, o GitHub pausa as execuções agendadas. Se isso acontecer, é só reativar em **Actions**.
 
-## ☕ Contribuições
+## Aviso
 
-Feito com ☕ e código!
-
-Sinta-se à vontade para abrir uma [Issue](../../issues) para relatar problemas ou sugerir melhorias, ou enviar um Pull Request com suas contribuições.
-
-**Importante:** Utilize o aplicativo apenas para baixar conteúdos que você possui autorização para baixar, respeitando os direitos autorais e os termos de serviço das plataformas envolvidas.
+Use apenas para conteúdo que você tem o direito de baixar (seus próprios vídeos, licenças livres/Creative Commons, domínio público). Respeite os Termos de Serviço do YouTube e a lei de direitos autorais do seu país. O autor não se responsabiliza pelo uso indevido da ferramenta.

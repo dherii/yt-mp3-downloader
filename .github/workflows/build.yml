@@ -1,51 +1,117 @@
-name: Compilar Executável Windows
+name: Build Windows (.exe) e publicar Release
 
 on:
+  # 1) Publicar uma versão "manual": git tag v1.2.0 && git push origin v1.2.0
+  #    (ou criar a tag pela interface do GitHub em Releases > Draft a new release)
   push:
-    branches: [ "main" ]
-  tags:
-    - 'v*' # Aciona a criação da página de download quando você criar uma tag (ex: v1.0.0)
+    tags:
+      - "v*"
+
+  # 2) Release automática mensal (dia 1 de cada mês, 12:00 UTC = 09:00 em Brasília).
+  #    Recompila com o yt-dlp mais recente, porque o YouTube muda e versões antigas quebram.
+  schedule:
+    - cron: "0 12 1 * *"
+
+  # 3) Rodar à mão (aba Actions > Run workflow) só para TESTAR o build:
+  #    gera o .exe como "artefato" para baixar, sem criar Release.
+  workflow_dispatch:
+
+permissions:
+  contents: write # necessário para criar a Release e anexar o .exe
+
+env:
+  APP_NAME: YT-MP3-Downloader
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
-    permissions:
-      contents: write # Permissão obrigatória para criar a Release
-
     steps:
-      - name: Checkout do código
+      - name: Baixar o código
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Instalar Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.12"
+          cache: pip
 
-      - name: Instalar Dependências
-        run: |
-          pip install yt-dlp pyinstaller customtkinter
+      - name: Instalar dependências
+        run: pip install -r requirements.txt pyinstaller
 
-      - name: Baixar FFmpeg (Essencial para converter para MP3)
+      - name: Definir o nome da versão (tag)
+        id: versao
         shell: pwsh
         run: |
-          # Baixa o FFmpeg oficial para Windows e extrai apenas o ffmpeg.exe
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
-          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg_extracted"
-          Move-Item -Path "ffmpeg_extracted\*\bin\ffmpeg.exe" -Destination "ffmpeg.exe"
+          # Tag enviada por você (v1.2.0) -> usa ela. Execução mensal -> v + data de hoje.
+          if ($env:GITHUB_REF_TYPE -eq "tag") { $tag = $env:GITHUB_REF_NAME }
+          else { $tag = "v" + (Get-Date -Format "yyyy.MM.dd") }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "Versão: $tag"
 
-      - name: Gerar Executável (Tudo em 1 arquivo)
+      - name: Anotar a versão do yt-dlp usada
+        id: ytdlp
+        shell: pwsh
+        run: |
+          $v = python -c "from yt_dlp.version import __version__; print(__version__)"
+          "versao=$v" >> $env:GITHUB_OUTPUT
+          "yt-dlp: $v"
+
+      # O usuário final não precisa instalar o FFmpeg: ele vai dentro do .exe.
+      # (O ffprobe.exe não é necessário: o yt-dlp converte para MP3 só com o ffmpeg.)
+      - name: Baixar FFmpeg para embutir no executável
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp
+          $exe = Get-ChildItem -Path ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          if (-not $exe) { throw "ffmpeg.exe não encontrado no zip baixado." }
+          Copy-Item $exe.FullName -Destination ffmpeg.exe
+          Remove-Item ffmpeg.zip, ffmpeg_tmp -Recurse -Force
+          "ffmpeg.exe: {0:N0} MB" -f ((Get-Item ffmpeg.exe).Length / 1MB)
+
+      - name: Gerar o executável com PyInstaller
         shell: pwsh
         run: |
           $ctk = python -c "import customtkinter, os; print(os.path.dirname(customtkinter.__file__))"
           pyinstaller --noconfirm --onefile --windowed `
-            --name "BaixarMusicas" `
+            --name "$env:APP_NAME" `
+            --icon "assets/icon.ico" `
             --add-data "${ctk};customtkinter/" `
-            --add-binary "ffmpeg.exe;." `
+            --add-data "assets;assets" `
+            --add-data "ffmpeg.exe;." `
             main.py
 
-      - name: Publicar na Página de Releases (Apenas quando for Tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Teste rápido: se faltar algum arquivo do CustomTkinter, o programa fecha
+      # sozinho logo ao abrir e o build falha aqui, antes de publicar.
+      # (Pode remover este passo se ele atrapalhar.)
+      - name: Teste rápido - o programa abre sem fechar sozinho?
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\$env:APP_NAME.exe" -PassThru
+          Start-Sleep -Seconds 12
+          if ($p.HasExited) { throw "O executável fechou sozinho (código $($p.ExitCode))." }
+          Stop-Process -Id $p.Id -Force
+          "OK: o programa abriu e continuou rodando."
+
+      - name: Guardar o .exe como artefato (execuções manuais)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows
+          path: dist/${{ env.APP_NAME }}.exe
+
+      - name: Publicar no GitHub Releases
+        if: github.ref_type == 'tag' || github.event_name == 'schedule'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/BaixarMusicas.exe
+          tag_name: ${{ steps.versao.outputs.tag }}
+          files: dist/${{ env.APP_NAME }}.exe
           generate_release_notes: true
+          body: |
+            ## Como usar (Windows)
+            1. Baixe o arquivo **${{ env.APP_NAME }}.exe** na seção *Assets* logo abaixo.
+            2. Dê dois cliques para abrir. Não precisa instalar nada.
+            3. Se aparecer a tela azul "O Windows protegeu o computador", clique em **Mais informações** e depois em **Executar assim mesmo**.
+
+            _Versão do yt-dlp usada nesta compilação: ${{ steps.ytdlp.outputs.versao }}_

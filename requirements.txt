@@ -1,0 +1,4 @@
+customtkinter>=5.2.2
+# Sem versão fixa de propósito: cada build novo leva o yt-dlp mais recente,
+# porque o YouTube muda com frequência e versões antigas quebram.
+yt-dlp
